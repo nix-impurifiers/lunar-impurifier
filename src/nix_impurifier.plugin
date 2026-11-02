@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Lunar's plugin protocol uses status 2 to continue to other plugins.
+nix_impurifier_post_install() {
+  if [[ -x /usr/sbin/lunar-impurifier-activate ]]; then
+    /usr/sbin/lunar-impurifier-activate || return 1
+  fi
+  return 2
+}
+nix_impurifier_post_remove() {
+  [[ ${UPGRADE:-off} == on ]] && return 2
+  if [[ -x /usr/sbin/lunar-impurifier-activate ]]; then
+    /usr/sbin/lunar-impurifier-activate || return 1
+  fi
+  return 2
+}
+plugin_register BUILD_POST_INSTALL nix_impurifier_post_install
+plugin_register BUILD_POST_REMOVE nix_impurifier_post_remove
