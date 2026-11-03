@@ -95,7 +95,9 @@ let
       '';
   makeRuntimeModule =
     {
-      nixDependency ? "nix",
+      bundledNixStore ? null,
+      bundledNixNotices ? [ ],
+      nixDependency ? (if bundledNixStore == null then "nix" else null),
       pythonDependency ? "python3",
       installwatchDependency ? "installwatch",
       version ? core.runtimeVersion,
@@ -103,14 +105,13 @@ let
     buildModule {
       name = "lunar-impurifier";
       inherit version;
-      dependencies = [
-        nixDependency
+      dependencies = lib.optional (nixDependency != null) nixDependency ++ [
         pythonDependency
         installwatchDependency
       ];
       activate = true;
       payload = pkgs.runCommand "lunar-runtime" { } ''
-        cp -r ${core.makeRuntimeTree { }} $out
+        cp -r ${core.makeRuntimeTree { inherit bundledNixStore bundledNixNotices; }} $out
         chmod -R u+w $out
         install -Dm755 ${../src/activate.py} $out/usr/sbin/lunar-impurifier-activate
         install -Dm755 ${../src/nix_impurifier.plugin} $out/var/lib/lunar/plugins/nix_impurifier.plugin
@@ -208,6 +209,7 @@ in
     net = makeModule (args // { offline = false; });
     offline = makeModule (args // { offline = true; });
   };
+  makeNativeModule = args: buildModule (args // { activate = false; });
   runtimeModule = makeRuntimeModule { };
   inherit (core) unit;
 }

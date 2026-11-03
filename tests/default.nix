@@ -3,8 +3,21 @@
   pkgs,
   impurifier,
   coreSrc,
+  bundled ? false,
 }:
 let
+  nativeProof = pkgs.pkgsStatic.stdenv.mkDerivation {
+    name = "native-static-proof";
+    dontUnpack = true;
+    buildPhase = ''
+      cat > proof.c <<'C'
+      #include <stdio.h>
+      int main(void) { puts("Hello from native payload"); return 0; }
+      C
+      $CC proof.c -o proof
+    '';
+    installPhase = "mkdir -p $out/bin; cp proof $out/bin/";
+  };
   source = import ../nix/tools.nix { inherit pkgs; };
   module = pkgs.runCommand "native-lunar-fixture" { } ''
     mkdir -p $out/test/native-marker
@@ -93,6 +106,21 @@ let
       pkgs.runCommand "license-rejected-fixture" { }
         "mkdir -p $out/usr/share/impurifier-vm; echo should-not-install > $out/usr/share/impurifier-vm/license-rejected";
   };
+  nativeMoonbase =
+    version:
+    impurifier.makeMoonbase {
+      modules = [
+        (impurifier.makeNativeModule {
+          name = "native-payload";
+          inherit version;
+          payload = pkgs.runCommand "native-lunar-${version}" { } ''
+            mkdir -p $out/usr/libexec/native-lunar $out/usr/share
+            cp ${nativeProof}/bin/proof $out/usr/libexec/native-lunar/proof
+            echo ${version} > $out/usr/share/native-lunar-version
+          '';
+        })
+      ];
+    };
   moonbase =
     {
       offline,
@@ -127,7 +155,12 @@ in
       nix.settings.substituters = lib.mkForce [ ];
       systemd.tmpfiles.rules = [
         "L+ /usr/bin/python3 - - - - ${pkgs.python3}/bin/python3"
-        "L+ /usr/bin/nix-store - - - - ${pkgs.nix}/bin/nix-store"
+        "L+ /usr/bin/nix-store - - - - ${
+          if bundled then
+            pkgs.writeShellScript "incompatible-nix-store" "echo incompatible; exit 1"
+          else
+            "${pkgs.nix}/bin/nix-store"
+        }"
         "L+ /usr/bin/nix - - - - ${pkgs.nix}/bin/nix"
       ];
       virtualisation.qemu.package = lib.mkForce pkgs.qemu;
@@ -179,6 +212,13 @@ in
           succeed(f"rm -rf /moonbase; cp -r {path} /moonbase; chmod -R u+w /moonbase; rm -f /var/state/lunar/module.index")
       def fail(command):
           return machine.fail("export PATH=/sbin:/usr/sbin:/usr/bin:$PATH; " + command)
+      with subtest("native generated modules without engine activation"):
+          for version, path in [(1, "${nativeMoonbase "1"}"), (2, "${nativeMoonbase "2"}")]:
+              select_moonbase(path)
+              succeed("lin -c --from /moonbase/source-cache native-payload > /tmp/native-payload.log 2>&1; grep '^" + str(version) + "$' /usr/share/native-lunar-version || { cat /tmp/native-payload.log; exit 1; }")
+              succeed("grep /usr/libexec/native-lunar/proof /var/log/lunar/install/native-payload-" + str(version))
+          succeed("mkdir -p /srv/native; cp /usr/libexec/native-lunar/proof /srv/native/proof; chroot /srv/native /proof | grep Hello; test ! -e /srv/native/nix; test ! -e /usr/sbin/lunar-impurifier-activate")
+          succeed("lrm native-payload; test ! -e /usr/libexec/native-lunar/proof; test ! -e /usr/share/native-lunar-version")
       select_moonbase("${
         moonbase {
           offline = false;
